@@ -15,7 +15,6 @@ static int	__init ModuleInit(void)
 static void	__exit ModuleExit(void)
 {
 	printk(KERN_INFO "Bye Kernel !\n");
-	return ;
 }
 
 module_init(ModuleInit);

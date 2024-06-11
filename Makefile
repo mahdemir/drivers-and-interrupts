@@ -1,4 +1,4 @@
-obj-m += hello_kernel.o
+obj-m += keylogger.o
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
