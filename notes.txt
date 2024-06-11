@@ -1,0 +1,12 @@
+module info:
+	modinfo <module name>.ko
+
+install module:
+	insmod <module name>.ko
+
+remove module:
+	rmmod <module name>
+
+Macro's __init and __exit out of "<linux/init.h>" play a crucial role in:
+	optimizing memory usage (__init)
+	ensuring proper resource cleanup (__exit)
